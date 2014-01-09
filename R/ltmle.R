@@ -10,7 +10,7 @@
 ltmle <- function(data, Anodes, Cnodes=NULL, Lnodes=NULL, Ynodes, survivalOutcome=NULL, Qform=NULL, gform=NULL, 
                   abar, rule=NULL, Qbounds=NULL, gbounds=c(0.01, 1), Yrange=NULL, deterministic.g.function=NULL, 
                   stratify=FALSE, SL.library=NULL, estimate.time=nrow(data) > 50, gcomp=FALSE, mhte.iptw=FALSE, 
-                  iptw.only=FALSE, deterministic.Q.function=NULL) {
+                  iptw.only=FALSE, deterministic.Q.function=NULL, variance.options=NULL) {
   if (!is.null(rule)) {
     if (!(missing(abar) || is.null(abar))) stop("'abar' should not be specified when using a 'rule' function")
     abar <- t(apply(data, 1, rule))
@@ -27,7 +27,7 @@ ltmle <- function(data, Anodes, Cnodes=NULL, Lnodes=NULL, Ynodes, survivalOutcom
   colnames(summary.measures) <- "S1"
   summary.baseline.covariates <- NULL
 
-  temp <- ltmleMSM.private(data=data, Anodes=Anodes, Cnodes=Cnodes, Lnodes=Lnodes, Ynodes=Ynodes, survivalOutcome=survivalOutcome, Qform=Qform, gform=gform, Yrange=Yrange, Qbounds=Qbounds, gbounds=gbounds, deterministic.g.function=deterministic.g.function, SL.library=SL.library, regimes=regimes, working.msm=working.msm, summary.measures=summary.measures, summary.baseline.covariates=summary.baseline.covariates, final.Ynodes=NULL, pooledMSM=TRUE, stratify=stratify, weight.msm=FALSE, estimate.time=estimate.time, gcomp=gcomp, normalizeIC=FALSE, mhte.iptw=FALSE, iptw.only=iptw.only, deterministic.Q.function=deterministic.Q.function) #it doesn't matter whether mhte.iptw is T or F when pooledMSM=T
+  temp <- ltmleMSM.private(data=data, Anodes=Anodes, Cnodes=Cnodes, Lnodes=Lnodes, Ynodes=Ynodes, survivalOutcome=survivalOutcome, Qform=Qform, gform=gform, Yrange=Yrange, Qbounds=Qbounds, gbounds=gbounds, deterministic.g.function=deterministic.g.function, SL.library=SL.library, regimes=regimes, working.msm=working.msm, summary.measures=summary.measures, summary.baseline.covariates=summary.baseline.covariates, final.Ynodes=NULL, pooledMSM=TRUE, stratify=stratify, weight.msm=FALSE, estimate.time=estimate.time, gcomp=gcomp, normalizeIC=FALSE, mhte.iptw=FALSE, iptw.only=iptw.only, deterministic.Q.function=deterministic.Q.function, variance.options=variance.options) #it doesn't matter whether mhte.iptw is T or F when pooledMSM=T
   nodes <- CreateNodes(data, Anodes, Cnodes, Lnodes, Ynodes)
   
   #This is somewhat inefficient and can lead to coding errors - we convert censoring and clean data twice - once in ltmleMSM.private and again here. This needs to be fixed soon. Can pass back data from ltmleMSM.private but CalcIPTW is expected untransformed outcomes - wil need to transform iptw and naive. Other issues?
@@ -68,6 +68,8 @@ ltmle <- function(data, Anodes, Cnodes=NULL, Lnodes=NULL, Ynodes, survivalOutcom
     r$IC[[estName]] <- r$IC[[estName]]*diff(Yrange)
   }
 
+  r$alt.var <- temp$alt.var
+
   class(r) <- "ltmle"
   return(r)
 }
@@ -83,13 +85,13 @@ ltmleMSM <- function(data, Anodes, Cnodes=NULL, Lnodes=NULL, Ynodes, survivalOut
     if (!all(do.call(c, lapply(regimes, is.function)))) stop("If 'regimes' is a list, then all elements should be functions.")
     regimes <- aperm(simplify2array(lapply(regimes, function(rule) apply(data, 1, rule)), higher=TRUE), c(2, 1, 3)) 
   }
-  result <- ltmleMSM.private(data, Anodes, Cnodes, Lnodes, Ynodes, survivalOutcome, Qform, gform, Qbounds=NULL, gbounds, Yrange, deterministic.g.function, SL.library, regimes, working.msm, summary.measures, summary.baseline.covariates, final.Ynodes, pooledMSM, stratify, weight.msm, estimate.time, gcomp, normalizeIC=TRUE, mhte.iptw, iptw.only, deterministic.Q.function)
+  result <- ltmleMSM.private(data, Anodes, Cnodes, Lnodes, Ynodes, survivalOutcome, Qform, gform, Qbounds=NULL, gbounds, Yrange, deterministic.g.function, SL.library, regimes, working.msm, summary.measures, summary.baseline.covariates, final.Ynodes, pooledMSM, stratify, weight.msm, estimate.time, gcomp, normalizeIC=TRUE, mhte.iptw, iptw.only, deterministic.Q.function, variance.options=NULL)
   result$call <- match.call()
   return(result) 
 }
 
 # This just shields the normalizeIC parameter, which should always be TRUE except when being called by ltmle
-ltmleMSM.private <- function(data, Anodes, Cnodes, Lnodes, Ynodes, survivalOutcome, Qform, gform, Qbounds, gbounds, Yrange, deterministic.g.function, SL.library, regimes, working.msm, summary.measures, summary.baseline.covariates, final.Ynodes, pooledMSM, stratify, weight.msm, estimate.time, gcomp, normalizeIC, mhte.iptw, iptw.only, deterministic.Q.function) {
+ltmleMSM.private <- function(data, Anodes, Cnodes, Lnodes, Ynodes, survivalOutcome, Qform, gform, Qbounds, gbounds, Yrange, deterministic.g.function, SL.library, regimes, working.msm, summary.measures, summary.baseline.covariates, final.Ynodes, pooledMSM, stratify, weight.msm, estimate.time, gcomp, normalizeIC, mhte.iptw, iptw.only, deterministic.Q.function, variance.options) {
   #######################################
   # Setup/Input checking and correction #
   #######################################
@@ -125,9 +127,9 @@ ltmleMSM.private <- function(data, Anodes, Cnodes, Lnodes, Ynodes, survivalOutco
   # Setup done #
   ##############
   
-  if (estimate.time) EstimateTime(data, nodes, survivalOutcome, Qform, gform, Qbounds, gbounds, SL.library, regimes, working.msm, summary.measures, summary.baseline.covariates, final.Ynodes, pooledMSM, stratify, weight.msm, gcomp, mhte.iptw, iptw.only)
+  if (estimate.time) EstimateTime(data, nodes, survivalOutcome, Qform, gform, Qbounds, gbounds, SL.library, regimes, working.msm, summary.measures, summary.baseline.covariates, final.Ynodes, pooledMSM, stratify, weight.msm, gcomp, mhte.iptw, iptw.only, variance.options)
   
-  result <- MainCalcs(data, nodes, survivalOutcome, Qform, gform, Qbounds, gbounds, deterministic.g.function, SL.library, regimes, working.msm, summary.measures, summary.baseline.covariates, final.Ynodes, normalizeIC, pooledMSM, stratify, weight.msm, gcomp, mhte.iptw, iptw.only, deterministic.Q.function)
+  result <- MainCalcs(data, nodes, survivalOutcome, Qform, gform, Qbounds, gbounds, deterministic.g.function, SL.library, regimes, working.msm, summary.measures, summary.baseline.covariates, final.Ynodes, normalizeIC, pooledMSM, stratify, weight.msm, gcomp, mhte.iptw, iptw.only, deterministic.Q.function, variance.options)
   result$gcomp <- gcomp
   result$formulas <- list(Qform=Qform, gform=gform)
   result$binaryOutcome <- check.results$binaryOutcome
@@ -138,7 +140,7 @@ ltmleMSM.private <- function(data, Anodes, Cnodes, Lnodes, Ynodes, survivalOutco
 }
 
 # Loop over final Ynodes, run main calculations
-MainCalcs <- function(data, nodes, survivalOutcome, Qform, gform, Qbounds, gbounds, deterministic.g.function, SL.library, regimes, working.msm, summary.measures, summary.baseline.covariates, final.Ynodes, normalizeIC, pooledMSM, stratify, weight.msm, gcomp, mhte.iptw, iptw.only, deterministic.Q.function) {
+MainCalcs <- function(data, nodes, survivalOutcome, Qform, gform, Qbounds, gbounds, deterministic.g.function, SL.library, regimes, working.msm, summary.measures, summary.baseline.covariates, final.Ynodes, normalizeIC, pooledMSM, stratify, weight.msm, gcomp, mhte.iptw, iptw.only, deterministic.Q.function, variance.options) {
   if (! pooledMSM) {
     if (! is.null(summary.baseline.covariates)) stop("summary.baseline.covariates not supported")
     if (!is.null(Qbounds)) stop("non-pooled MSM is not set up to handle Qbounds yet...\nbut ltmleMSM doesn't accept the argument, so how did you get here?")
@@ -169,7 +171,7 @@ MainCalcs <- function(data, nodes, survivalOutcome, Qform, gform, Qbounds, gboun
     }
     
     #It would be better to reuse g instead of calculating the same thing every time final.Ynode varies (note: g does need to be recalculated for each abar/regime) - memoizing gets around this to some degree but it could be written better
-    fixed.tmle <- FixedTimeTMLE(data[, 1:final.Ynode, drop=FALSE], nodes$A[nodes$A <= final.Ynode], nodes$C[nodes$C <= final.Ynode], nodes$L[nodes$L <= final.Ynode], nodes$Y[nodes$Y <= final.Ynode], survivalOutcome, Qform[nodes$LY <= final.Ynode], gform1, Qbounds, gbounds,  deterministic.g.function, SL.library, regimes[, nodes$A <= final.Ynode, , drop=FALSE], working.msm, summary.measures[, , j, drop=FALSE], summary.baseline.covariates, stratify, weight.msm, gcomp, iptw.only, deterministic.Q.function)
+    fixed.tmle <- FixedTimeTMLE(data[, 1:final.Ynode, drop=FALSE], nodes$A[nodes$A <= final.Ynode], nodes$C[nodes$C <= final.Ynode], nodes$L[nodes$L <= final.Ynode], nodes$Y[nodes$Y <= final.Ynode], survivalOutcome, Qform[nodes$LY <= final.Ynode], gform1, Qbounds, gbounds,  deterministic.g.function, SL.library, regimes[, nodes$A <= final.Ynode, , drop=FALSE], working.msm, summary.measures[, , j, drop=FALSE], summary.baseline.covariates, stratify, weight.msm, gcomp, iptw.only, deterministic.Q.function, variance.options)
     if (iptw.only) return(list(cum.g=fixed.tmle$cum.g))
     if (j == 1) {
       IC <- fixed.tmle$IC
@@ -183,7 +185,7 @@ MainCalcs <- function(data, nodes, survivalOutcome, Qform, gform, Qbounds, gboun
   IC <- FinalizeIC(IC, summary.measures, summary.baseline.covariates, Qstar, fitted.msm$m.beta, weights, normalizeIC)
   beta <- coef(fitted.msm$m)
   names(beta) <- main.terms$beta.names
-  return(list(IC=IC, msm=fitted.msm$m, beta=beta, cum.g=fixed.tmle$cum.g, fit=fixed.tmle$fit)) #note: only returns cum.g and fit for the last final.Ynode
+  return(list(IC=IC, msm=fitted.msm$m, beta=beta, cum.g=fixed.tmle$cum.g, fit=fixed.tmle$fit, alt.var=fixed.tmle$alt.var)) #note: only returns cum.g and fit for the last final.Ynode
 }
 
 # Fit the MSM
@@ -217,7 +219,7 @@ FitPooledMSM <- function(working.msm, Qstar, summary.measures, weights, summary.
 }
 
 # ltmleMSM for a single final.Ynode
-FixedTimeTMLE <- function(data, Anodes, Cnodes, Lnodes, Ynodes, survivalOutcome, Qform, gform, Qbounds, gbounds, deterministic.g.function, SL.library, regimes, working.msm, summary.measures, summary.baseline.covariates, stratify, weight.msm, gcomp, iptw.only, deterministic.Q.function) {
+FixedTimeTMLE <- function(data, Anodes, Cnodes, Lnodes, Ynodes, survivalOutcome, Qform, gform, Qbounds, gbounds, deterministic.g.function, SL.library, regimes, working.msm, summary.measures, summary.baseline.covariates, stratify, weight.msm, gcomp, iptw.only, deterministic.Q.function, variance.options) {
   #summary.measures: num.regimes x num.summary.measures
   #summary.baseline.covariates: names/indicies: num.summary.baseline.covariates x 1 
   #stacked.summary.measures: (n*num.regimes) x (num.summary.measures + num.summary.baseline.covariates)
@@ -240,6 +242,8 @@ FixedTimeTMLE <- function(data, Anodes, Cnodes, Lnodes, Ynodes, survivalOutcome,
     is.duplicate <- FALSE  #without this if statement there were problems when abar=NULL (ncol(regimes)=0)
   }
   fit.g <- vector("list", num.regimes)
+  alt.var <- list() #alternate variance estimates
+
   for (i in 1:num.regimes) {
     if (is.duplicate[i]) {
       weights[i] <- 0
@@ -307,13 +311,78 @@ FixedTimeTMLE <- function(data, Anodes, Cnodes, Lnodes, Ynodes, survivalOutcome,
         update.list$fit <- fix.score.list$fit
       } 
       IC <- IC + curIC
+
+      #################################
+      # alternate variance estimators #
+      #################################
+      if ("rare.Y" %in% variance.options || "sum.var.IC.rare.Y" %in% variance.options) {
+        #if using either "rare" modification, need to calculate the IC at the last time point using inflated Qstar
+        if (j == length(nodes$LY)) {
+          gamma <- if(is.null(variance.options$gamma)) 1 else variance.options$gamma
+          delta <- if(is.null(variance.options$delta)) 1 else variance.options$delta 
+
+          ##assuming only one regime. calculate inflated Qstar      
+          n.regime.events <-  sum(Qstar.kplus1[uncensored & intervention.match, ])
+          n.regime <- sum(uncensored & intervention.match)
+          u <- (n.regime.events + gamma)/(n.regime+2*gamma)
+          v <- (u * (1-u))/(n.regime + 2*gamma)
+          Qstar.inflated <- pmin(Qstar + delta*v, max(Qbounds))
+
+          #calc IC based on inflated Qstar
+          alt.var$IC.rare.Y <- CalcIC(Qstar.kplus1, Qstar.inflated, update.list$h.g.ratio, uncensored, intervention.match, regimes.with.positive.weight)
+        } else {
+          #for other time points, increment the "rare" IC with curIC
+          alt.var$IC.rare.Y <- alt.var$IC.rare.Y + curIC
+        }
+      }
+
+      if ("sum.var.IC" %in% variance.options) {
+        #calculate the variance as the sum of IC components at each time point
+        if (j == length(nodes$LY)) {
+          alt.var$sum.var.IC <- var(curIC)
+        } else {
+          alt.var$sum.var.IC <- alt.var$sum.var.IC + var(curIC)
+        }
+      }
+      if ("sum.var.IC.rare.Y" %in% variance.options) {
+        if (j == length(nodes$LY)) {
+          alt.var$sum.var.IC.rare.Y <- var(alt.var$IC.rare.Y)
+        } else {
+          alt.var$sum.var.IC.rare.Y <- alt.var$sum.var.IC.rare.Y + var(curIC)
+        }
+      }
+      #####################################
+      # end alternate variance estimators #
+      #####################################      
     }
     Qstar.kplus1 <- Qstar
     fit.Q[[j]] <- Q.est$fit
     fit.Qstar[[j]] <- update.list$fit
   }
+
+  #################################
+  # alternate variance estimators #
+  #################################
+  #
+  #not sure if this is correct, since I'm not exactly sure what FinalizeIC is doing
+  if ("rare.Y" %in% variance.options) {
+    alt.var$IC.rare.Y <- alt.var$IC.rare.Y  + Qstar - mean(Qstar)
+    alt.var$var.rare.Y <- sum(alt.var$IC.rare.Y^2)/(length(alt.var$IC.rare.Y)-1)^2
+  }
+  if ("sum.var.IC" %in% variance.options) {
+    alt.var$sum.var.IC <- alt.var$sum.var.IC + var(Qstar)
+    alt.var$sum.var.IC <- alt.var$sum.var.IC / (length(IC) - 1)
+  }
+  if ("sum.var.IC.rare.Y" %in% variance.options) {
+    alt.var$sum.var.IC.rare.Y <- alt.var$sum.var.IC.rare.Y + var(Qstar)
+    alt.var$sum.var.IC.rare.Y <- alt.var$sum.var.IC.rare.Y / (length(IC) - 1)    
+  }
+  #####################################
+  # end alternate variance estimators #
+  ##################################### 
+
   #tmle <- colMeans(Qstar)
-  return(list(IC=IC, Qstar=Qstar, weights=weights, cum.g=cum.g, fit=list(g=fit.g, Q=fit.Q, Qstar=fit.Qstar))) 
+  return(list(IC=IC, Qstar=Qstar, weights=weights, cum.g=cum.g, fit=list(g=fit.g, Q=fit.Q, Qstar=fit.Qstar), alt.var=alt.var)) 
 }
 
 #final step in calculating TMLE influence curve
@@ -536,11 +605,11 @@ FixScoreEquation <- function(Qstar.kplus1, h.g.ratio, uncensored, intervention.m
 }
 
 # Estimate how long it will take to run ltmleMSM
-EstimateTime <- function(data, nodes, survivalOutcome, Qform, gform, Qbounds, gbounds, SL.library, regimes, working.msm, summary.measures, summary.baseline.covariates, final.Ynodes, pooledMSM, stratify, weight.msm, gcomp, mhte.iptw, iptw.only) {
+EstimateTime <- function(data, nodes, survivalOutcome, Qform, gform, Qbounds, gbounds, SL.library, regimes, working.msm, summary.measures, summary.baseline.covariates, final.Ynodes, pooledMSM, stratify, weight.msm, gcomp, mhte.iptw, iptw.only, variance.options) {
   sample.index <- sample(nrow(data), size=50)
   start.time <- Sys.time()
   if (is.matrix(gform)) gform <- gform[sample.index, , drop=F]
-  try.result <- try(  MainCalcs(data[sample.index, ], nodes, survivalOutcome, Qform, gform, Qbounds, gbounds, deterministic.g.function=NULL, SL.library, regimes[sample.index, , , drop=F], working.msm, summary.measures, summary.baseline.covariates[sample.index, , drop=F], final.Ynodes, normalizeIC=FALSE, pooledMSM, stratify, weight.msm, gcomp, mhte.iptw, iptw.only, deterministic.Q.function=NULL), silent=TRUE)
+  try.result <- try(  MainCalcs(data[sample.index, ], nodes, survivalOutcome, Qform, gform, Qbounds, gbounds, deterministic.g.function=NULL, SL.library, regimes[sample.index, , , drop=F], working.msm, summary.measures, summary.baseline.covariates[sample.index, , drop=F], final.Ynodes, normalizeIC=FALSE, pooledMSM, stratify, weight.msm, gcomp, mhte.iptw, iptw.only, deterministic.Q.function=NULL, variance.options=variance.options), silent=TRUE)
   if (inherits(try.result, "try-error")) {
     message("Timing estimate unavailable")
   } else {
