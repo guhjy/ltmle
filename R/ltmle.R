@@ -519,7 +519,9 @@ UpdateQ <- function(Qstar.kplus1, logitQ, stacked.summary.measures, subs, Qbound
       m <- boundedlogistic(f, 
                            data=data.temp, 
                            subset=as.vector(subs), 
-                           weights=weight.vec)
+                           weights=weight.vec,
+                           a = min(Qbounds),
+                           b = max(Qbounds))
       newdata <- data.frame(Y, X, off)
       Qstar <- matrix(predict(m, newdata=newdata, type="response"), nrow=nrow(logitQ))  #this should NOT include the indicators
     }
