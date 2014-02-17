@@ -88,50 +88,62 @@ print.boundedlogistic <- function(obj) print(coef(obj))
 boundedlogistic.fit <- function(x, y, a, b, offset, method="L-BFGS-B", w=NULL) {
   ## Uses the transformed Y loss function
   ystar <- (y-a)/(b-a)
-  risk <- function(beta) {
-    # p <- plogis(X %*% cbind(beta) + offset)
-    # ## Add bounding
-    # -2 * sum(ystar * log(p) + (1-ystar) * log(1-p))
+  ff <- function(beta) {
     xB <- if (!is.null(offset)) {
       x %*% cbind(beta) + offset
       } else {
-      x %*% cbind(beta) 
-      }
-
-    unweighted_loglik <- ystar * plogis(xB, log.p=TRUE) + 
-                         (1-ystar) * plogis(xB, log.p=TRUE, lower.tail=FALSE)
-    if (is.null(w)) {
-      weighted_loglik <- unweighted_loglik
-    } else {
-      weighted_loglik <- unweighted_loglik * w
+      x %*% cbind(beta)
     }
 
-    -2 * sum(weighted_loglik)
+    unweighted_loglik <- ystar * plogis(xB, log.p=TRUE) + (1-ystar) * plogis(xB, log.p=TRUE, lower.tail=FALSE)
+
+    if (is.null(w)) {
+      -2 * sum(unweighted_loglik)
+    } else {
+      -2 * sum(w * unweighted_loglik)
+    }
   }
 
-  gr <- function(beta) {
-    p <- if (!is.null(offset)) {
-        plogis(x %*% cbind(beta) + offset)
+  gg <- function(beta) {
+    xB <- if (!is.null(offset)) {
+      x %*% cbind(beta) + offset
       } else {
-        plogis(x %*% cbind(beta))
-      }
+      x %*% cbind(beta)
+    }
+    p <- plogis(xB)
+
     if (is.null(w)) 2 * crossprod(x, cbind(p - ystar))
     else 2 * crossprod(x, w*cbind(p - ystar))
   }
 
-  optim.res <- optim(rep(0, ncol(x)), risk, gr=gr, method=method)
-  beta <- optim.res$par
+  hh <- function(beta) {
+    xB <- if (!is.null(offset)) {
+      x %*% cbind(beta) + offset
+      } else {
+      x %*% cbind(beta)
+    }
+    p <- plogis(xB)
+    S <- c(p * (1-p))
+    if (is.null(w)) 2* crossprod(x, S *  x)
+    else 2* crossprod(x, (S*w) *  x)
+  }
+
+  nlminb.res <- nlminb(rep(0, ncol(x)), ff, gg, hh)
+  # if (nlminb.res$convergence != 0)
+  #   stop(nlminb.res$message)
+
+  beta <- nlminb.res$par
   names(beta) <- colnames(x)
 
   xB <- if (!is.null(offset)) {
-      x %*% cbind(beta) + offset
-      } else {
-      x %*% cbind(beta) 
-      }
+    x %*% cbind(beta) + offset
+    } else {
+    x %*% cbind(beta) 
+    }
 
 
 
-  res <- list(coefficients=beta, a=a, b=b, xB=xB, optim.res=optim.res)
+  res <- list(coefficients=beta, a=a, b=b, xB=xB, nlminb.res=nlminb.res)
 
   class(res) <- "boundedlogistic"
 
